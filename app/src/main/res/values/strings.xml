@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">WatchoutRF</string>
+    <string name="splash_title">WatchoutRF</string>
+    <string name="splash_subtitle">SPECTRUM ANALYZER</string>
+    <string name="home_no_device">No device</string>
+    <string name="home_connect_title">Connect SDR Dongle</string>
+    <string name="home_connect_description">Connect your RTL-SDR USB dongle to start analyzing the RF spectrum</string>
+    <string name="supported_devices_label">SUPPORTED DEVICES</string>
+    <string name="version_format">WatchoutRF v%1$s</string>
+</resources>

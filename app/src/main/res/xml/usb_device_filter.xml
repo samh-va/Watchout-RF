@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- RTL2832U generic -->
+    <usb-device vendor-id="3034" product-id="10290" />
+    <!-- RTL-SDR Blog V3/V4 -->
+    <usb-device vendor-id="3034" product-id="10296" />
+    <!-- RTL2832U with FC0012 tuner -->
+    <usb-device vendor-id="3034" product-id="10282" />
+    <!-- RTL2832U with FC0013 tuner -->
+    <usb-device vendor-id="3034" product-id="10283" />
+    <!-- RTL2832U with FC2580 tuner -->
+    <usb-device vendor-id="3034" product-id="10288" />
+    <!-- RTL2832U with E4000 tuner -->
+    <usb-device vendor-id="3034" product-id="10289" />
+</resources>

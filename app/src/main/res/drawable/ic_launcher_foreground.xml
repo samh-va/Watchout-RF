@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Antenna pole -->
+    <path
+        android:pathData="M54,78 L54,35"
+        android:strokeWidth="3.5"
+        android:strokeColor="#00FF88"
+        android:strokeLineCap="round" />
+
+    <!-- Antenna base -->
+    <path
+        android:pathData="M44,78 L64,78"
+        android:strokeWidth="3"
+        android:strokeColor="#00FF88"
+        android:strokeLineCap="round" />
+
+    <!-- Signal arc 1 (inner) -->
+    <path
+        android:pathData="M54,35 M44,35 A10,10 0 0,1 64,35"
+        android:strokeWidth="2.5"
+        android:strokeColor="#00E5FF"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round" />
+
+    <!-- Signal arc 2 (middle) -->
+    <path
+        android:pathData="M54,35 M38,35 A16,16 0 0,1 70,35"
+        android:strokeWidth="2"
+        android:strokeColor="#00E5FF"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.7" />
+
+    <!-- Signal arc 3 (outer) -->
+    <path
+        android:pathData="M54,35 M32,35 A22,22 0 0,1 76,35"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E5FF"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.4" />
+
+    <!-- Center dot -->
+    <path
+        android:pathData="M54,35 m-3,0 a3,3 0 1,1 6,0 a3,3 0 1,1 -6,0"
+        android:fillColor="#00FF88" />
+</vector>
