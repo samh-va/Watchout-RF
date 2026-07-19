@@ -10,7 +10,7 @@ data class ScanConfig(
     val manualGainDb: Int = 40,
     val windowType: WindowType = WindowType.HAMMING,
     val scanMode: ScanMode = ScanMode.CONTINUOUS,
-    val averagingFactor: Float = 0.3f,     // 0 = no averaging, 1 = full hold
+    val averagingFactor: Float = 0.5f,     // 0 = no averaging, 1 = full hold
     val maxHoldEnabled: Boolean = true,
     val referenceLevel: Float = -20f,      // dBm, top of display
     val dynamicRange: Float = 80f,         // dB, from reference to bottom

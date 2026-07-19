@@ -109,12 +109,22 @@ class Rtl2832uChip(private val conn: UsbDeviceConnection) {
         Log.d(TAG, "setSampleRate: requested=${sampleRateHz} actual=${realRate}")
 
         with(RtlSdrProtocol) {
-            writeDemodReg(conn, 1, 0x19, rsampRatio shr 16, 2)
-            writeDemodReg(conn, 1, 0x1b, rsampRatio and 0xFFFF, 2)
+            writeDemodReg(conn, 1, 0x9f, rsampRatio shr 16, 2)
+            writeDemodReg(conn, 1, 0xa1, rsampRatio and 0xFFFF, 2)
+        }
+        return true
+    }
 
-            // Bandwidth calculation for decimation filter
-            val tmp = ((realRsampRatio shr 16) - (1 shl 15)) and 0xFFFF
-            writeDemodReg(conn, 1, 0x1f, tmp, 2)
+    /**
+     * Set the Intermediate Frequency (IF) of the tuner so the digital down-converter (DDC)
+     * can shift it to baseband (0 Hz).
+     */
+    fun setIfFreq(ifFreqHz: Long): Boolean {
+        val ifFreq = -((ifFreqHz * (1L shl 22)) / XTAL_FREQ).toInt()
+        with(RtlSdrProtocol) {
+            writeDemodReg(conn, 1, 0x19, (ifFreq shr 16) and 0x3F, 1)
+            writeDemodReg(conn, 1, 0x1a, (ifFreq shr 8) and 0xFF, 1)
+            writeDemodReg(conn, 1, 0x1b, ifFreq and 0xFF, 1)
         }
         return true
     }
@@ -130,8 +140,8 @@ class Rtl2832uChip(private val conn: UsbDeviceConnection) {
      */
     fun resetBuffer(): Boolean {
         with(RtlSdrProtocol) {
-            writeReg(conn, BLOCK_USB, 0x61, 0x02)
-            writeReg(conn, BLOCK_USB, 0x61, 0x00)
+            writeReg16(conn, BLOCK_USB, 0x2148, 0x1002)
+            writeReg16(conn, BLOCK_USB, 0x2148, 0x0000)
         }
         return true
     }

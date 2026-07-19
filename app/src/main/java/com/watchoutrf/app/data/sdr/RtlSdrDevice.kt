@@ -135,8 +135,9 @@ class RtlSdrDevice private constructor(
             return "ERR_TUNER_$tunerInitResult"
         }
 
-        // 4. Set IF bandwidth
+        // 4. Set IF bandwidth and frequency
         tuner.setIfBandwidth(sampleRateHz / 2)
+        demod.setIfFreq(3_570_000L) // R820T2 IF is 3.57 MHz
 
         // 5. Disable I2C repeater
         demod.setI2cRepeater(false)
@@ -305,6 +306,16 @@ class RtlSdrDevice private constructor(
                 System.arraycopy(buf, 0, result, 0, buf.size)
                 result
             }
+        }
+    }
+
+    /** 
+     * Flushes the latest buffer. Useful after changing frequencies 
+     * so the next readSamples waits for a fresh hardware capture.
+     */
+    fun flush() {
+        synchronized(streamLock) {
+            latestBuffer = null
         }
     }
 

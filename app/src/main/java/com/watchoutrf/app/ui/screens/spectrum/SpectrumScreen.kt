@@ -3,7 +3,8 @@ package com.watchoutrf.app.ui.screens.spectrum
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -18,11 +19,22 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Canvas
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.watchoutrf.app.ui.components.controls.FrequencyRangeSelector
@@ -82,9 +94,7 @@ fun SpectrumScreen(
             SpectrumArea(
                 state = state,
                 textMeasurer = textMeasurer,
-                onTapSpectrum = { normalizedX ->
-                    viewModel.addMarker(normalizedX)
-                },
+                onMarkerUpdate = viewModel::updateActiveMarker,
             )
         }
 
@@ -333,7 +343,7 @@ private fun ControlPanel(
 private fun SpectrumArea(
     state: SpectrumState,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
-    onTapSpectrum: (Float) -> Unit,
+    onMarkerUpdate: (Float) -> Unit,
 ) {
     val config = state.scanConfig
 
@@ -364,9 +374,18 @@ private fun SpectrumArea(
                     .weight(1f)
                     .fillMaxHeight()
                     .pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            val normalizedX = offset.x / size.width.toFloat()
-                            onTapSpectrum(normalizedX)
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            val normalizedX = (down.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                            onMarkerUpdate(normalizedX)
+                            
+                            do {
+                                val event = awaitPointerEvent()
+                                val pos = event.changes.firstOrNull()?.position ?: break
+                                val nx = (pos.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                onMarkerUpdate(nx)
+                                event.changes.forEach { it.consume() }
+                            } while (event.changes.any { it.pressed })
                         }
                     },
             ) {
@@ -387,6 +406,19 @@ private fun SpectrumArea(
                     textMeasurer = textMeasurer,
                     modifier = Modifier.fillMaxSize(),
                 )
+
+                if (state.activeMarkerX != null) {
+                    ActiveMarkerOverlay(
+                        normalizedX = state.activeMarkerX,
+                        spectrumData = state.currentSpectrum,
+                        startHz = config.frequencyRange.startHz,
+                        endHz = config.frequencyRange.endHz,
+                        referenceLevel = config.referenceLevel,
+                        dynamicRange = config.dynamicRange,
+                        textMeasurer = textMeasurer,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
@@ -428,6 +460,7 @@ private fun SpectrumArea(
 // ════════════════════════════════════════════════════════
 @Composable
 private fun BottomMarkerBar(state: SpectrumState) {
+    val activeX = state.activeMarkerX
     val allMarkers = state.allMarkers
 
     Row(
@@ -438,19 +471,62 @@ private fun BottomMarkerBar(state: SpectrumState) {
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .height(28.dp),
     ) {
-        if (allMarkers.isEmpty()) {
+        // Active marker info (left side)
+        if (activeX != null) {
+            val config = state.scanConfig
+            val range = config.frequencyRange
+            val freqHz = range.startHz + ((range.endHz - range.startHz) * activeX).toLong()
+            val spectrum = state.currentSpectrum
+            val ampDbm = if (spectrum != null && spectrum.isNotEmpty()) {
+                val bin = (activeX * (spectrum.size - 1)).toInt().coerceIn(0, spectrum.size - 1)
+                spectrum[bin]
+            } else null
+
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xFFFF6B00)),
+            )
+            Spacer(modifier = Modifier.width(4.dp))
             Text(
-                text = "Tap spectrum to add markers",
+                text = formatFreqForMarker(freqHz),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFFF6B00),
+                maxLines = 1,
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = if (ampDbm != null) "${String.format("%.1f", ampDbm)} dBm" else "--",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextPrimary,
+                maxLines = 1,
+            )
+        } else {
+            Text(
+                text = "Tap and drag on spectrum",
                 style = MaterialTheme.typography.labelSmall,
                 color = TextDim,
             )
-        } else {
+        }
+
+        // Separator + auto-detected peaks (right side)
+        if (allMarkers.isNotEmpty()) {
+            Spacer(modifier = Modifier.width(12.dp))
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .height(16.dp)
+                    .background(GridLine),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.weight(1f),
             ) {
                 items(allMarkers) { marker ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Marker color indicator dot
                         Box(
                             modifier = Modifier
                                 .size(6.dp)
@@ -492,6 +568,11 @@ private fun formatMhz(hz: Double): String {
     }
 }
 
+private fun formatFreqForMarker(hz: Long): String {
+    val mhz = hz / 1_000_000.0
+    return String.format("%.3f MHz", mhz)
+}
+
 private fun markerColorToComposeColor(color: com.watchoutrf.app.domain.model.MarkerColor): androidx.compose.ui.graphics.Color {
     return when (color) {
         com.watchoutrf.app.domain.model.MarkerColor.RED -> ErrorRed
@@ -502,5 +583,100 @@ private fun markerColorToComposeColor(color: com.watchoutrf.app.domain.model.Mar
         com.watchoutrf.app.domain.model.MarkerColor.CYAN -> CyanDim
         com.watchoutrf.app.domain.model.MarkerColor.MAGENTA -> androidx.compose.ui.graphics.Color(0xFFFF00FF)
         com.watchoutrf.app.domain.model.MarkerColor.WHITE -> TextPrimary
+    }
+}
+
+@Composable
+private fun ActiveMarkerOverlay(
+    normalizedX: Float,
+    spectrumData: FloatArray?,
+    startHz: Long,
+    endHz: Long,
+    referenceLevel: Float,
+    dynamicRange: Float,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val x = normalizedX * w
+        
+        // Vertical crosshair line
+        drawLine(
+            color = Color(0xFFFF6B00),  // Orange
+            start = Offset(x, 0f),
+            end = Offset(x, h),
+            strokeWidth = 1.5.dp.toPx(),
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 3.dp.toPx()))
+        )
+        
+        // Calculate frequency and amplitude at this position
+        val freqHz = startHz + ((endHz - startHz) * normalizedX).toLong()
+        val amplitude = if (spectrumData != null && spectrumData.isNotEmpty()) {
+            val bin = (normalizedX * (spectrumData.size - 1)).toInt().coerceIn(0, spectrumData.size - 1)
+            spectrumData[bin]
+        } else null
+        
+        // Draw small diamond at the amplitude point
+        if (amplitude != null) {
+            val y = (h * (referenceLevel - amplitude) / dynamicRange).coerceIn(0f, h)
+            val diamondSize = 5.dp.toPx()
+            val diamondPath = Path().apply {
+                moveTo(x, y - diamondSize)
+                lineTo(x + diamondSize, y)
+                lineTo(x, y + diamondSize)
+                lineTo(x - diamondSize, y)
+                close()
+            }
+            drawPath(diamondPath, color = Color(0xFFFF6B00))
+        }
+        
+        // Draw frequency label box at the top
+        val freqText = formatFreqForMarker(freqHz)
+        val ampText = if (amplitude != null) String.format("%.1f dBm", amplitude) else "--"
+        val label = "$freqText\n$ampText"
+        
+        val textLayoutResult = textMeasurer.measure(
+            text = label,
+            style = TextStyle(
+                color = Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        )
+        
+        // Position the label box - flip sides if near the edge
+        val labelWidth = textLayoutResult.size.width.toFloat()
+        val labelHeight = textLayoutResult.size.height.toFloat()
+        val padding = 4.dp.toPx()
+        val labelX = if (x + labelWidth + padding * 3 > w) {
+            x - labelWidth - padding * 3  // Show on left side
+        } else {
+            x + padding  // Show on right side
+        }
+        val labelY = 4.dp.toPx()
+        
+        // Background rectangle
+        drawRoundRect(
+            color = Color(0xCC000000),
+            topLeft = Offset(labelX, labelY),
+            size = Size(labelWidth + padding * 2, labelHeight + padding * 2),
+            cornerRadius = CornerRadius(4.dp.toPx()),
+        )
+        // Border
+        drawRoundRect(
+            color = Color(0xFFFF6B00),
+            topLeft = Offset(labelX, labelY),
+            size = Size(labelWidth + padding * 2, labelHeight + padding * 2),
+            cornerRadius = CornerRadius(4.dp.toPx()),
+            style = Stroke(width = 1.dp.toPx()),
+        )
+        
+        // Text
+        drawText(
+            textLayoutResult = textLayoutResult,
+            topLeft = Offset(labelX + padding, labelY + padding),
+        )
     }
 }

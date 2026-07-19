@@ -21,7 +21,7 @@
 /* Calibration offset in dB — accounts for RTL-SDR gain chain.
  * Adjust experimentally; -113 dBm is a reasonable starting point
  * for auto-gain mode on the R820T2. */
-#define CALIBRATION_OFFSET_DB (-113.0f)
+#define CALIBRATION_OFFSET_DB (-20.0f)
 
 /* ======================================================================
  * Sprint 1 functions
@@ -158,10 +158,22 @@ Java_com_watchoutrf_app_NativeLib_processIqToSpectrum(
     if (norm < 1e-6f) norm = 1.0f;
 
     /* Convert unsigned-8 IQ → complex float with windowing
-     * RTL-SDR: 0 = -1.0, 127 = 0.0, 255 = +1.0 */
+     * RTL-SDR: 0 = -1.0, 127 = 0.0, 255 = +1.0
+     * Also compute DC offset to subtract it. */
+    float sum_I = 0.0f;
+    float sum_Q = 0.0f;
     for (int i = 0; i < num_bins; i++) {
         float I = ((uint8_t)iq[i * 2    ] - 127.5f) / 128.0f;
         float Q = ((uint8_t)iq[i * 2 + 1] - 127.5f) / 128.0f;
+        sum_I += I;
+        sum_Q += Q;
+    }
+    float mean_I = sum_I / num_bins;
+    float mean_Q = sum_Q / num_bins;
+
+    for (int i = 0; i < num_bins; i++) {
+        float I = (((uint8_t)iq[i * 2    ] - 127.5f) / 128.0f) - mean_I;
+        float Q = (((uint8_t)iq[i * 2 + 1] - 127.5f) / 128.0f) - mean_Q;
         float w = apply_window(i, num_bins, wtype);
         in[i].r = I * w;
         in[i].i = Q * w;
@@ -169,6 +181,27 @@ Java_com_watchoutrf_app_NativeLib_processIqToSpectrum(
 
     /* Forward FFT */
     kiss_fft(cfg, in, out);
+    
+    /* Remove DC spike: the RTL-SDR zero-IF architecture leaks energy
+     * into several bins around DC (bin 0). We interpolate a ±radius
+     * zone from the clean edges so no artifact survives. */
+    #define DC_KILL_RADIUS 5
+    {
+        /* Clean reference values just outside the kill zone */
+        int left_ref  = num_bins - DC_KILL_RADIUS - 1;  /* just before the zone wraps */
+        int right_ref = DC_KILL_RADIUS + 1;              /* just after the zone */
+        float left_r  = out[left_ref].r,  left_i  = out[left_ref].i;
+        float right_r = out[right_ref].r, right_i = out[right_ref].i;
+        int zone_len  = 2 * DC_KILL_RADIUS + 1;  /* total bins to interpolate */
+
+        for (int k = 0; k < zone_len; k++) {
+            float t = (float)(k + 1) / (float)(zone_len + 1);
+            int idx = (num_bins - DC_KILL_RADIUS + k) % num_bins;
+            out[idx].r = left_r * (1.0f - t) + right_r * t;
+            out[idx].i = left_i * (1.0f - t) + right_i * t;
+        }
+    }
+    #undef DC_KILL_RADIUS
 
     /* Magnitude → dBm, with DC-centring (FFT shift)
      * bin 0..N/2-1  → positive freq half (stored at index N/2..N-1)
@@ -180,7 +213,7 @@ Java_com_watchoutrf_app_NativeLib_processIqToSpectrum(
         float im = out[src].i;
 
         /* Power spectral density (normalised) */
-        float power = (re * re + im * im) / ((float)num_bins * norm * norm);
+        float power = (re * re + im * im) / ((float)num_bins * (float)num_bins * norm * norm);
 
         /* Convert to dBm */
         mag[i] = 10.0f * log10f(power + 1e-20f) + CALIBRATION_OFFSET_DB;

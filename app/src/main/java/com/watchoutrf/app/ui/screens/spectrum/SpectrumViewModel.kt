@@ -124,8 +124,9 @@ class SpectrumViewModel @Inject constructor(
             if (errorString == null) {
                 _state.value = _state.value.copy(debugState = "SDR_OK")
                 // Apply current frequency range and gain before starting the data stream
-                // (Starting the stream before the tuner is configured can stall the USB hardware)
-                sdrSource.setFrequency(_state.value.scanConfig.frequencyRange)
+                // (Starting the stream before the tuner is configured)
+                // 3. Set initial state
+                // Note: Frequency is tuned by the continuous sweep loop in startScanning()
                 sdrSource.setGain(
                     _state.value.scanConfig.gainMode,
                     _state.value.scanConfig.manualGainDb,
@@ -170,23 +171,88 @@ class SpectrumViewModel @Inject constructor(
             while (isActive && _state.value.isScanning) {
                 val config = _state.value.scanConfig
                 val range  = config.frequencyRange
+                val spanHz = range.spanHz
+                
+                // Hardware has ~2 MHz usable bandwidth per tuning hop.
+                val chunkHz = 2_000_000L
+                val numHops = maxOf(1, Math.ceil(spanHz.toDouble() / chunkHz.toDouble()).toInt())
+                
+                val masterSpectrum = FloatArray(config.numBins) { -300f }
+                val hzPerUiBin = spanHz.toDouble() / config.numBins
+                
+                var sweepFailed = false
 
-                // --- Acquire one spectrum frame ---
-                val rawMagnitudes: FloatArray? = if (!_state.value.isDemoMode && sdrSource.isOpen) {
-                    // Real hardware path
-                    sdrSource.readSpectrum(config.numBins)
-                } else {
-                    // Synthetic / demo path
-                    syntheticGenerator.generateSpectrum(
-                        startFreqHz = range.startHz,
-                        endFreqHz   = range.endHz,
-                        numBins     = config.numBins,
-                        noiseFloorDbm = (config.referenceLevel - config.dynamicRange).toDouble(),
-                    ).magnitudes
-                }
+                for (hopIndex in 0 until numHops) {
+                    if (!isActive || !_state.value.isScanning) break
+                    
+                    // Break if user changed range while we were sweeping
+                    if (_state.value.scanConfig.frequencyRange != range) break
+                    
+                    val hopStartHz = range.startHz + (hopIndex * chunkHz)
+                    var hopEndHz = hopStartHz + chunkHz
+                    if (hopEndHz > range.endHz) hopEndHz = range.endHz
+                    
+                    val hopCenterHz = (hopStartHz + hopEndHz) / 2
+                    
+                    val rawMagnitudes: FloatArray? = if (!_state.value.isDemoMode && sdrSource.isOpen) {
+                        // 1. Tune hardware to this hop
+                        sdrSource.setFrequency(hopCenterHz)
+                        
+                        // 2. Wait for PLL lock and discard stale USB buffers
+                        delay(25)
+                        sdrSource.flush()
+                        
+                        // 3. Read raw spectrum for this 2.048 MHz chunk (1024 bins)
+                        sdrSource.readSpectrum(1024)
+                    } else {
+                        // Demo mode
+                        syntheticGenerator.generateSpectrum(
+                            startFreqHz = hopStartHz,
+                            endFreqHz   = hopEndHz,
+                            numBins     = 1024,
+                            noiseFloorDbm = (config.referenceLevel - config.dynamicRange).toDouble(),
+                        ).magnitudes
+                    }
 
-                if (rawMagnitudes == null) {
-                    // Hardware read failure — surface error and fall back
+                    if (rawMagnitudes == null) {
+                        sweepFailed = true
+                        break
+                    }
+                    
+                    // 4. Map the 1024 high-res bins into the master UI array (Decimation)
+                    // Skip edge bins (analog filter roll-off) and DC-center zone
+                    val chunkStartHz = hopCenterHz - 1_024_000L
+                    val chunkEndHz = hopCenterHz + 1_024_000L
+                    val chunkHzPerBin = (chunkEndHz - chunkStartHz).toDouble() / rawMagnitudes.size
+                    
+                    // Trim: skip outer 5% on each edge (filter roll-off)
+                    // and skip ±0.5% around center (DC spike zone after FFT-shift)
+                    val edgeTrim = (rawMagnitudes.size * 0.05).toInt()   // 51 bins
+                    val dcCenter = rawMagnitudes.size / 2
+                    val dcHalf   = (rawMagnitudes.size * 0.005).toInt().coerceAtLeast(3)  // ~5 bins
+                    
+                    for (i in edgeTrim until (rawMagnitudes.size - edgeTrim)) {
+                        // Skip the DC zone (center of the FFT-shifted output)
+                        if (i in (dcCenter - dcHalf)..(dcCenter + dcHalf)) continue
+                        
+                        val binFreqHz = chunkStartHz + (i * chunkHzPerBin)
+                        // Only use bins within our intended hop range
+                        if (binFreqHz >= hopStartHz && binFreqHz <= hopEndHz) {
+                            if (binFreqHz >= range.startHz && binFreqHz <= range.endHz) {
+                                val uiBinIndex = ((binFreqHz - range.startHz) / hzPerUiBin).toInt()
+                                    .coerceIn(0, config.numBins - 1)
+                                
+                                // Max-pooling: keep the highest peak if multiple raw bins map to one UI bin
+                                if (rawMagnitudes[i] > masterSpectrum[uiBinIndex]) {
+                                    masterSpectrum[uiBinIndex] = rawMagnitudes[i]
+                                }
+                            }
+                        }
+                    }
+
+                } // End of hop loop
+
+                if (sweepFailed) {
                     _state.value = _state.value.copy(
                         hwError = "Read error from dongle. Falling back to demo.",
                         isDemoMode = true,
@@ -194,9 +260,46 @@ class SpectrumViewModel @Inject constructor(
                     delay(FRAME_DELAY_MS)
                     continue
                 }
+                
+                // Gap-filling: linearly interpolate between valid bins
+                // This smoothly bridges the DC-trimmed zones instead of
+                // carrying a spike value forward.
+                var gapStart = -1
+                for (i in masterSpectrum.indices) {
+                    if (masterSpectrum[i] <= -299.9f) {
+                        if (gapStart < 0) gapStart = i
+                    } else {
+                        if (gapStart >= 0) {
+                            // We found the end of a gap at index i
+                            val leftVal = if (gapStart > 0) masterSpectrum[gapStart - 1] else masterSpectrum[i]
+                            val rightVal = masterSpectrum[i]
+                            val gapLen = i - gapStart
+                            for (g in 0 until gapLen) {
+                                val t = (g + 1).toFloat() / (gapLen + 1).toFloat()
+                                masterSpectrum[gapStart + g] = leftVal + (rightVal - leftVal) * t
+                            }
+                            gapStart = -1
+                        }
+                    }
+                }
+                // Fill any trailing gap
+                if (gapStart >= 0) {
+                    val leftVal = if (gapStart > 0) masterSpectrum[gapStart - 1] else -100f
+                    for (g in gapStart until masterSpectrum.size) {
+                        masterSpectrum[g] = leftVal
+                    }
+                }
+                
+                // Spectral smoothing: 3-bin moving average to reduce visual noise
+                val smoothed = FloatArray(masterSpectrum.size)
+                for (i in masterSpectrum.indices) {
+                    val left  = if (i > 0) masterSpectrum[i - 1] else masterSpectrum[i]
+                    val right = if (i < masterSpectrum.size - 1) masterSpectrum[i + 1] else masterSpectrum[i]
+                    smoothed[i] = (left + masterSpectrum[i] + right) / 3f
+                }
 
-                // --- DSP pipeline ---
-                val averaged = averager.average(rawMagnitudes, config.averagingFactor)
+                // --- DSP pipeline (Runs once per full sweep) ---
+                val averaged = averager.average(smoothed, config.averagingFactor)
 
                 val maxHold = if (config.maxHoldEnabled) {
                     averager.updateMaxHold(averaged)
@@ -204,16 +307,16 @@ class SpectrumViewModel @Inject constructor(
                     _state.value.maxHoldSpectrum
                 }
 
-                // Waterfall history (newest at front, capped at MAX_WATERFALL_HISTORY)
+                // Waterfall history
                 waterfallBuffer.add(0, averaged.copyOf())
                 if (waterfallBuffer.size > MAX_WATERFALL_HISTORY)
                     waterfallBuffer.removeAt(waterfallBuffer.lastIndex)
 
-                // Peak detection every N frames
+                // Peak detection
                 peakFrameCounter++
                 val detectedPeaks = if (peakFrameCounter >= PEAK_DETECT_INTERVAL) {
                     peakFrameCounter = 0
-                    val frameForDetection = com.watchoutrf.app.domain.model.SpectrumData(
+                    val frameForDetection = SpectrumData(
                         frequencyStartHz = range.startHz,
                         frequencyEndHz   = range.endHz,
                         magnitudes       = averaged,
@@ -228,7 +331,7 @@ class SpectrumViewModel @Inject constructor(
                     _state.value.autoDetectedPeaks
                 }
 
-                // FPS tracking
+                // FPS tracking (here it tracks Sweeps Per Second)
                 frameCount++
                 val now     = System.currentTimeMillis()
                 val elapsed = now - fpsTimestamp
@@ -249,13 +352,14 @@ class SpectrumViewModel @Inject constructor(
                     framesPerSecond   = fps,
                 )
 
-                // Single-sweep mode stops after one frame
+                // Single-sweep mode stops after one full sweep
                 if (config.scanMode == ScanMode.SINGLE) {
                     _state.value = _state.value.copy(isScanning = false)
                     break
                 }
 
-                delay(FRAME_DELAY_MS)
+                // Small delay to prevent burning CPU if sweep is instantaneous
+                delay(10)
             }
         }
     }
@@ -272,10 +376,8 @@ class SpectrumViewModel @Inject constructor(
 
     fun updateFrequencyRange(range: FrequencyRange) {
         averager.reset()
-        // If hardware is active, retune immediately
-        if (!_state.value.isDemoMode && sdrSource.isOpen) {
-            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { sdrSource.setFrequency(range) }
-        }
+        // Hardware retuning will be handled automatically by the next iteration 
+        // of the sweep loop in startScanning().
         _state.value = _state.value.copy(
             scanConfig        = _state.value.scanConfig.copy(frequencyRange = range),
             currentSpectrum   = null,
@@ -317,6 +419,10 @@ class SpectrumViewModel @Inject constructor(
         _state.value = _state.value.copy(maxHoldSpectrum = null)
     }
 
+    fun updateActiveMarker(normalizedX: Float?) {
+        _state.value = _state.value.copy(activeMarkerX = normalizedX)
+    }
+
     fun addMarker(normalizedX: Float) {
         val config   = _state.value.scanConfig
         val range    = config.frequencyRange
@@ -345,7 +451,10 @@ class SpectrumViewModel @Inject constructor(
     }
 
     fun clearMarkers() {
-        _state.value = _state.value.copy(markers = emptyList())
+        _state.value = _state.value.copy(
+            markers = emptyList(),
+            activeMarkerX = null
+        )
     }
 
     fun dismissHwError() {

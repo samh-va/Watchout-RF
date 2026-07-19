@@ -115,10 +115,6 @@ private fun dbmToY(dbm: Float, height: Float, referenceLevel: Float, dynamicRang
     return (height * (referenceLevel - dbm) / dynamicRange).coerceIn(0f, height)
 }
 
-/**
- * Builds a [Path] from an array of dBm samples, evenly distributed across the
- * canvas width.
- */
 private fun DrawScope.buildTracePath(
     data: FloatArray,
     w: Float,
@@ -130,14 +126,41 @@ private fun DrawScope.buildTracePath(
     val count = data.size
     if (count == 0) return path
 
-    val xStep = if (count > 1) w / (count - 1).toFloat() else 0f
+    // Hardware canvas drops paths with too many points.
+    // Decimate to approx screen width (e.g. 2000 points max) using peak-picking.
+    val maxPoints = w.toInt().coerceIn(500, 4000)
 
-    val firstY = dbmToY(data[0], h, referenceLevel, dynamicRange)
-    path.moveTo(0f, firstY)
 
-    for (i in 1 until count) {
+    if (count <= maxPoints) {
+        val xStep = if (count > 1) w / (count - 1).toFloat() else 0f
+        path.moveTo(0f, dbmToY(data[0], h, referenceLevel, dynamicRange))
+        for (i in 1 until count) {
+            path.lineTo(i * xStep, dbmToY(data[i], h, referenceLevel, dynamicRange))
+        }
+        return path
+    }
+
+    // Decimation: for each pixel column, find the MAX value in that chunk
+    val pointsToDraw = maxPoints
+    val chunkStep = count.toFloat() / pointsToDraw
+    val xStep = w / (pointsToDraw - 1).toFloat()
+
+    var chunkStart = 0f
+    path.moveTo(0f, dbmToY(data[0], h, referenceLevel, dynamicRange))
+
+    for (i in 0 until pointsToDraw) {
+        val startIdx = chunkStart.toInt().coerceIn(0, count - 1)
+        chunkStart += chunkStep
+        val endIdx = chunkStart.toInt().coerceIn(0, count)
+        
+        var maxVal = -300f
+        for (j in startIdx until endIdx) {
+            if (data[j] > maxVal) maxVal = data[j]
+        }
+        if (maxVal == -300f) maxVal = data[startIdx]
+        
         val x = i * xStep
-        val y = dbmToY(data[i], h, referenceLevel, dynamicRange)
+        val y = dbmToY(maxVal, h, referenceLevel, dynamicRange)
         path.lineTo(x, y)
     }
 

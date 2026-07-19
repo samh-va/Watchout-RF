@@ -158,7 +158,6 @@ object RtlSdrProtocol {
             // librtlsdr uses BIG-endian for len=2 in demodulator writes as well!
             byteArrayOf(((value shr 8) and 0xFF).toByte(), (value and 0xFF).toByte())
         }
-        // RTL2832U requires the 0x10 bit set in wIndex for demodulator writes
         val index = 0x10 or page
         val r = conn.controlTransfer(
             0x40, 0, realAddr, index, data, len, CTRL_TIMEOUT

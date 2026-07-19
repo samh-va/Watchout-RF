@@ -30,7 +30,7 @@ class RtlSdrSource @Inject constructor(
 
     // IQ buffer: we read several FFT-worth of samples per call and average
     // Using 8× the FFT size gives better SNR from incoherent averaging
-    private val READS_PER_SPECTRUM = 8
+    private val READS_PER_SPECTRUM = 4
 
     /**
      * Opens the RTL-SDR hardware and claims the USB interface.
@@ -55,12 +55,14 @@ class RtlSdrSource @Inject constructor(
         return null
     }
 
-    /**
-     * Set the centre frequency.  Call this whenever the user changes
-     * the frequency range.
-     */
+    /** Set the hardware center frequency using a FrequencyRange */
     fun setFrequency(range: FrequencyRange): Boolean {
         return device?.setFrequency(range.centerHz) ?: false
+    }
+
+    /** Set the hardware center frequency directly in Hz */
+    fun setFrequency(freqHz: Long): Boolean {
+        return device?.setFrequency(freqHz) ?: false
     }
 
     /** Set gain mode. */
@@ -74,11 +76,18 @@ class RtlSdrSource @Inject constructor(
         device?.startStreaming()
     }
 
+    /** Flush the hardware buffer */
+    fun flush() {
+        device?.flush()
+    }
+
     /**
      * Read one spectrum frame from the hardware.
      *
-     * Reads [READS_PER_SPECTRUM] × [numBins] × 2 IQ bytes, processes
-     * each block with KissFFT (native), and returns the per-bin average.
+     * Reads [READS_PER_SPECTRUM] IQ blocks, processes each with KissFFT
+     * (native), averages in **linear power** domain, then converts back
+     * to dBm. This preserves narrow signal peaks that dB-domain averaging
+     * would flatten.
      *
      * @return FloatArray of [numBins] dBm values, or null on I/O error.
      */
@@ -87,7 +96,9 @@ class RtlSdrSource @Inject constructor(
         val dev = device ?: return null
 
         val bytesPerBlock = bins * 2
-        val accumulator   = FloatArray(bins) { 0f }
+        // Accumulate in linear power (milliwatts) to preserve peaks
+        val linearAccum = FloatArray(bins) { 0f }
+        var validReads = 0
 
         repeat(READS_PER_SPECTRUM) { i ->
             val iq = dev.readSamples(bytesPerBlock) ?: run {
@@ -96,16 +107,24 @@ class RtlSdrSource @Inject constructor(
             }
             val spectrum = nativeLib.processIqToSpectrum(iq, bins, windowType)
                 ?: return@repeat
-            for (j in 0 until bins)
-                accumulator[j] += spectrum[j]
+            // Convert dBm → linear power and accumulate
+            for (j in 0 until bins) {
+                // 10^(dBm/10) converts dBm to milliwatts
+                linearAccum[j] += Math.pow(10.0, spectrum[j].toDouble() / 10.0).toFloat()
+            }
+            validReads++
         }
 
-        // Incoherent average in linear power, then back to dB
-        // (simple dB average is close enough here)
-        for (j in 0 until bins)
-            accumulator[j] /= READS_PER_SPECTRUM.toFloat()
+        if (validReads == 0) return null
 
-        return accumulator
+        // Average in linear domain, then convert back to dBm
+        val result = FloatArray(bins)
+        for (j in 0 until bins) {
+            val avgLinear = linearAccum[j] / validReads.toFloat()
+            result[j] = (10.0 * Math.log10(avgLinear.toDouble().coerceAtLeast(1e-20))).toFloat()
+        }
+
+        return result
     }
 
     /** Close the dongle and release USB resources. */
