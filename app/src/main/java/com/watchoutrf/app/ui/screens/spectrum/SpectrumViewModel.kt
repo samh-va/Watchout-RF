@@ -22,6 +22,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+import com.watchoutrf.app.data.db.NamedFrequencyDao
+
 /**
  * Orchestrates the spectrum scan loop.
  *
@@ -40,6 +42,7 @@ class SpectrumViewModel @Inject constructor(
     private val syntheticGenerator: SyntheticSignalGenerator,
     private val averager: SpectrumAverager,
     private val peakDetector: PeakDetector,
+    private val namedFrequencyDao: NamedFrequencyDao,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SpectrumState())
@@ -52,6 +55,30 @@ class SpectrumViewModel @Inject constructor(
 
     init {
         observeUsbConnection()
+        viewModelScope.launch {
+            namedFrequencyDao.getAllFrequencies().collect { frequencies ->
+                _state.value = _state.value.copy(namedFrequencies = frequencies)
+            }
+        }
+    }
+
+    // CRUD for Named Frequencies
+    fun addNamedFrequency(name: String, freqHz: Long, color: String = "#FF6B00") {
+        viewModelScope.launch {
+            namedFrequencyDao.insert(NamedFrequency(name = name, frequencyHz = freqHz, colorHex = color))
+        }
+    }
+
+    fun deleteNamedFrequency(freq: NamedFrequency) {
+        viewModelScope.launch {
+            namedFrequencyDao.delete(freq)
+        }
+    }
+
+    fun toggleFrequencyVisibility(freq: NamedFrequency) {
+        viewModelScope.launch {
+            namedFrequencyDao.update(freq.copy(isVisible = !freq.isVisible))
+        }
     }
 
     // =========================================================================
@@ -199,11 +226,13 @@ class SpectrumViewModel @Inject constructor(
                         sdrSource.setFrequency(hopCenterHz)
                         
                         // 2. Wait for PLL lock and discard stale USB buffers
-                        delay(25)
+                        delay(10) // Reduced from 25ms for faster sweeping
                         sdrSource.flush()
                         
                         // 3. Read raw spectrum for this 2.048 MHz chunk (1024 bins)
-                        sdrSource.readSpectrum(1024)
+                        // Adaptive reads: for large spans (>50MHz), do fewer reads per hop to double sweep speed
+                        val numReads = if (spanHz > 50_000_000L) 2 else 4
+                        sdrSource.readSpectrum(1024, numReads)
                     } else {
                         // Demo mode
                         syntheticGenerator.generateSpectrum(
@@ -454,6 +483,63 @@ class SpectrumViewModel @Inject constructor(
         _state.value = _state.value.copy(
             markers = emptyList(),
             activeMarkerX = null
+        )
+    }
+
+    fun updateNumBins(numBins: Int) {
+        averager.reset()
+        _state.value = _state.value.copy(
+            scanConfig = _state.value.scanConfig.copy(numBins = numBins),
+            currentSpectrum = null,
+            maxHoldSpectrum = null,
+        )
+    }
+
+    fun updateMarkerColor(markerId: Int, color: MarkerColor) {
+        val existing = _state.value.markers.map {
+            if (it.id == markerId) it.copy(color = color) else it
+        }
+        _state.value = _state.value.copy(markers = existing)
+    }
+
+    fun updateMarkerLabel(markerId: Int, newLabel: String) {
+        val existing = _state.value.markers.map {
+            if (it.id == markerId) it.copy(label = newLabel) else it
+        }
+        _state.value = _state.value.copy(markers = existing)
+    }
+
+    fun removeMarker(markerId: Int) {
+        val existing = _state.value.markers.filter { it.id != markerId }
+        _state.value = _state.value.copy(markers = existing)
+    }
+
+    fun addMarkerManual(freqHz: Long, label: String, color: MarkerColor? = null) {
+        val config = _state.value.scanConfig
+        val spectrum = _state.value.currentSpectrum
+
+        // Estimate amplitude if it is within the current range
+        val range = config.frequencyRange
+        val ampDbm = if (spectrum != null && freqHz >= range.startHz && freqHz <= range.endHz) {
+            val normalizedX = (freqHz - range.startHz).toFloat() / (range.endHz - range.startHz).toFloat()
+            val bin = (normalizedX * (spectrum.size - 1)).toInt().coerceIn(0, spectrum.size - 1)
+            spectrum[bin]
+        } else {
+            -100f
+        }
+
+        val existing = _state.value.markers
+        val markerIndex = (existing.maxOfOrNull { it.id } ?: 0) + 1
+        val finalColor = color ?: MarkerColor.entries[(markerIndex - 1) % MarkerColor.entries.size]
+
+        _state.value = _state.value.copy(
+            markers = existing + Marker(
+                id = markerIndex,
+                frequencyHz = freqHz.toDouble(),
+                amplitudeDbm = ampDbm,
+                label = if (label.isNotBlank()) label else "M$markerIndex",
+                color = finalColor,
+            )
         )
     }
 

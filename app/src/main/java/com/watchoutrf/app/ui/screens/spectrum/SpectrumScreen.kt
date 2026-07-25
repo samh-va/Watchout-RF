@@ -14,6 +14,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.BasicTextField
+import com.watchoutrf.app.domain.model.MarkerColor
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -55,6 +60,8 @@ fun SpectrumScreen(
         viewModel.startScanning()
     }
 
+    var showFrequencyManager by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -66,6 +73,7 @@ fun SpectrumScreen(
         TopStatusBar(
             state = state,
             onNavigateBack = onNavigateBack,
+            onResolutionChanged = viewModel::updateNumBins,
         )
 
         // ═══════════════════════════════════════════════
@@ -88,6 +96,9 @@ fun SpectrumScreen(
                 },
                 onResetMaxHold = viewModel::resetMaxHold,
                 onClearMarkers = viewModel::clearMarkers,
+                onShowFrequencyManager = { showFrequencyManager = true },
+                onColorChange = viewModel::updateMarkerColor,
+                onUpdateMarkerLabel = viewModel::updateMarkerLabel,
             )
 
             // ─── RIGHT SPECTRUM AREA ───
@@ -103,6 +114,16 @@ fun SpectrumScreen(
         // ═══════════════════════════════════════════════
         BottomMarkerBar(state = state)
     }
+
+    if (showFrequencyManager) {
+        FrequencyManagerSheet(
+            frequencies = state.namedFrequencies,
+            onDismiss = { showFrequencyManager = false },
+            onAddFrequency = viewModel::addNamedFrequency,
+            onDeleteFrequency = viewModel::deleteNamedFrequency,
+            onToggleVisibility = viewModel::toggleFrequencyVisibility
+        )
+    }
 }
 
 // ════════════════════════════════════════════════════════
@@ -112,7 +133,10 @@ fun SpectrumScreen(
 private fun TopStatusBar(
     state: SpectrumState,
     onNavigateBack: () -> Unit,
+    onResolutionChanged: (Int) -> Unit,
 ) {
+    val resolutionOptions = listOf(512, 1024, 2048)
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -196,6 +220,35 @@ private fun TopStatusBar(
 
         Spacer(modifier = Modifier.weight(1f))
 
+        // Resolution selector
+        Text(
+            text = "RES:",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary,
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        resolutionOptions.forEach { bins ->
+            val isSelected = state.scanConfig.numBins == bins
+            Text(
+                text = "$bins",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                ),
+                color = if (isSelected) NeonGreen else TextSecondary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .then(
+                        if (isSelected) Modifier.background(NeonGreen.copy(alpha = 0.15f))
+                        else Modifier
+                    )
+                    .clickable { onResolutionChanged(bins) }
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
         // Frequency range display
         val range = state.scanConfig.frequencyRange
         Text(
@@ -228,6 +281,9 @@ private fun ControlPanel(
     onStartStop: () -> Unit,
     onResetMaxHold: () -> Unit,
     onClearMarkers: () -> Unit,
+    onShowFrequencyManager: () -> Unit,
+    onColorChange: (Int, MarkerColor) -> Unit,
+    onUpdateMarkerLabel: (Int, String) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -255,9 +311,38 @@ private fun ControlPanel(
             onToggleMaxHold = onToggleMaxHold,
         )
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider(color = GridLine, thickness = 1.dp)
+
+        // ─── Custom Markers Scroller ───
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            items(state.markers) { marker ->
+                AndroidMarkerItem(
+                    marker = marker,
+                    onColorChange = onColorChange,
+                    onUpdateLabel = onUpdateMarkerLabel,
+                )
+            }
+        }
 
         // ─── Action Buttons ───
+        
+        OutlinedButton(
+            onClick = onShowFrequencyManager,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandOrange),
+            border = BorderStroke(1.dp, BrandOrange),
+            shape = RoundedCornerShape(8.dp),
+        ) {
+            Text("📡 Frequencies", style = MaterialTheme.typography.labelMedium)
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+
         // Start / Stop button
         Button(
             onClick = onStartStop,
@@ -407,6 +492,13 @@ private fun SpectrumArea(
                     modifier = Modifier.fillMaxSize(),
                 )
 
+                NamedFrequenciesOverlay(
+                    frequencies = state.namedFrequencies,
+                    startHz = config.frequencyRange.startHz,
+                    endHz = config.frequencyRange.endHz,
+                    modifier = Modifier.fillMaxSize()
+                )
+
                 if (state.activeMarkerX != null) {
                     ActiveMarkerOverlay(
                         normalizedX = state.activeMarkerX,
@@ -461,7 +553,7 @@ private fun SpectrumArea(
 @Composable
 private fun BottomMarkerBar(state: SpectrumState) {
     val activeX = state.activeMarkerX
-    val allMarkers = state.allMarkers
+    val autoPeaks = state.autoDetectedPeaks
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -510,8 +602,8 @@ private fun BottomMarkerBar(state: SpectrumState) {
             )
         }
 
-        // Separator + auto-detected peaks (right side)
-        if (allMarkers.isNotEmpty()) {
+        // Separator + auto-detected peaks only (right side)
+        if (autoPeaks.isNotEmpty()) {
             Spacer(modifier = Modifier.width(12.dp))
             Box(
                 modifier = Modifier
@@ -525,7 +617,7 @@ private fun BottomMarkerBar(state: SpectrumState) {
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.weight(1f),
             ) {
-                items(allMarkers) { marker ->
+                items(autoPeaks) { marker ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
@@ -678,5 +770,111 @@ private fun ActiveMarkerOverlay(
             textLayoutResult = textLayoutResult,
             topLeft = Offset(labelX + padding, labelY + padding),
         )
+    }
+}
+
+// ════════════════════════════════════════════════════════
+// CONTROL PANEL MARKER ITEM (inline editing + color picker)
+// ════════════════════════════════════════════════════════
+@Composable
+private fun AndroidMarkerItem(
+    marker: com.watchoutrf.app.domain.model.Marker,
+    onColorChange: (Int, MarkerColor) -> Unit,
+    onUpdateLabel: (Int, String) -> Unit,
+) {
+    val colorCycle = MarkerColor.entries
+    var isEditing by remember { mutableStateOf(false) }
+    var editValue by remember { mutableStateOf(marker.label) }
+
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (isEditing) {
+                BasicTextField(
+                    value = editValue,
+                    onValueChange = { editValue = it },
+                    textStyle = MaterialTheme.typography.labelMedium.copy(
+                        fontSize = 16.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(Color.DarkGray, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Save label",
+                    tint = NeonGreen,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clickable {
+                            onUpdateLabel(marker.id, editValue)
+                            isEditing = false
+                        },
+                )
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = marker.label,
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 16.sp),
+                        color = markerColorToComposeColor(marker.color),
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit label",
+                        tint = TextSecondary,
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clickable {
+                                isEditing = true
+                                editValue = marker.label
+                            },
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = formatMhz(marker.frequencyHz),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 13.sp),
+                color = TextSecondary,
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Explicit color palette — tap the color you want
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            colorCycle.forEach { colorEnum ->
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(markerColorToComposeColor(colorEnum))
+                        .clickable { onColorChange(marker.id, colorEnum) }
+                        .then(
+                            if (marker.color == colorEnum) {
+                                Modifier.border(2.dp, Color.White, RoundedCornerShape(50))
+                            } else Modifier,
+                        ),
+                )
+            }
+        }
     }
 }

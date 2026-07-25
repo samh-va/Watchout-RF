@@ -4,7 +4,7 @@ package com.watchoutrf.app.domain.model
  * Configuration parameters for a spectrum scan.
  */
 data class ScanConfig(
-    val frequencyRange: FrequencyRange = FrequencyRange.UHF_TV,
+    val frequencyRange: FrequencyRange = FrequencyRange.IEM_RANGE,
     val numBins: Int = 1024,
     val gainMode: GainMode = GainMode.Auto,
     val manualGainDb: Int = 40,
