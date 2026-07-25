@@ -45,3 +45,8 @@ val WaterfallMidLow = Color(0xFF0066CC)
 val WaterfallMid = Color(0xFF00CCCC)
 val WaterfallMidHigh = Color(0xFFFFCC00)
 val WaterfallHigh = Color(0xFFFF3300)
+
+// Brand aliases (for FrequencyManagerSheet and legacy references)
+val BrandOrange = WarningOrange
+val DarkBackground = DeepBlack
+val BrandRed = ErrorRed
