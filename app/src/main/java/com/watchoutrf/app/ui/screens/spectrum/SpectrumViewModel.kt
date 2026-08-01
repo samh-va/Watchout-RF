@@ -200,9 +200,13 @@ class SpectrumViewModel @Inject constructor(
                 val range  = config.frequencyRange
                 val spanHz = range.spanHz
                 
-                // Hardware has ~2 MHz usable bandwidth per tuning hop.
-                val chunkHz = 2_000_000L
-                val numHops = maxOf(1, Math.ceil(spanHz.toDouble() / chunkHz.toDouble()).toInt())
+                // ── FIXED SWEEP: use 80% of real SDR bandwidth as hop step ──
+                // RTL-SDR real BW is 2,048,000 Hz. We use 80% (1,638,400 Hz)
+                // as the hop advance so consecutive hops always overlap and
+                // no frequency falls in a blind gap between hops.
+                val sdrBwHz    = 2_048_000L
+                val usableBwHz = (sdrBwHz * 0.80).toLong()  // 1,638,400 Hz
+                val numHops    = maxOf(1, Math.ceil(spanHz.toDouble() / usableBwHz.toDouble()).toInt())
                 
                 val masterSpectrum = FloatArray(config.numBins) { -300f }
                 val hzPerUiBin = spanHz.toDouble() / config.numBins
@@ -214,23 +218,21 @@ class SpectrumViewModel @Inject constructor(
                     
                     // Break if user changed range while we were sweeping
                     if (_state.value.scanConfig.frequencyRange != range) break
-                    
-                    val hopStartHz = range.startHz + (hopIndex * chunkHz)
-                    var hopEndHz = hopStartHz + chunkHz
-                    if (hopEndHz > range.endHz) hopEndHz = range.endHz
-                    
-                    val hopCenterHz = (hopStartHz + hopEndHz) / 2
+
+                    // Center is the midpoint of the usable block for this hop
+                    val hopCenterHz = range.startHz + (hopIndex * usableBwHz) + (usableBwHz / 2)
+                    val hopStartHz  = range.startHz + (hopIndex * usableBwHz)
+                    val hopEndHz    = (hopStartHz + usableBwHz).coerceAtMost(range.endHz)
                     
                     val rawMagnitudes: FloatArray? = if (!_state.value.isDemoMode && sdrSource.isOpen) {
                         // 1. Tune hardware to this hop
                         sdrSource.setFrequency(hopCenterHz)
                         
                         // 2. Wait for PLL lock and discard stale USB buffers
-                        delay(10) // Reduced from 25ms for faster sweeping
+                        delay(10)
                         sdrSource.flush()
                         
-                        // 3. Read raw spectrum for this 2.048 MHz chunk (1024 bins)
-                        // Adaptive reads: for large spans (>50MHz), do fewer reads per hop to double sweep speed
+                        // 3. Read raw spectrum for this chunk
                         val numReads = if (spanHz > 50_000_000L) 2 else 4
                         sdrSource.readSpectrum(1024, numReads)
                     } else {
@@ -248,33 +250,29 @@ class SpectrumViewModel @Inject constructor(
                         break
                     }
                     
-                    // 4. Map the 1024 high-res bins into the master UI array (Decimation)
-                    // Skip edge bins (analog filter roll-off) and DC-center zone
-                    val chunkStartHz = hopCenterHz - 1_024_000L
-                    val chunkEndHz = hopCenterHz + 1_024_000L
+                    // 4. Map the 1024 high-res bins into the master UI array
+                    // The SDR always captures ±sdrBwHz/2 around the center
+                    val chunkStartHz  = hopCenterHz - (sdrBwHz / 2)
+                    val chunkEndHz    = hopCenterHz + (sdrBwHz / 2)
                     val chunkHzPerBin = (chunkEndHz - chunkStartHz).toDouble() / rawMagnitudes.size
                     
-                    // Trim: skip outer 5% on each edge (filter roll-off)
-                    // and skip ±0.5% around center (DC spike zone after FFT-shift)
-                    val edgeTrim = (rawMagnitudes.size * 0.05).toInt()   // 51 bins
+                    // FIXED: 2% edge trim (was 5% = 102 kHz loss per side)
+                    val edgeTrim = (rawMagnitudes.size * 0.02).toInt()
                     val dcCenter = rawMagnitudes.size / 2
-                    val dcHalf   = (rawMagnitudes.size * 0.005).toInt().coerceAtLeast(3)  // ~5 bins
+                    val dcHalf   = (rawMagnitudes.size * 0.005).toInt().coerceAtLeast(3)
                     
                     for (i in edgeTrim until (rawMagnitudes.size - edgeTrim)) {
                         // Skip the DC zone (center of the FFT-shifted output)
                         if (i in (dcCenter - dcHalf)..(dcCenter + dcHalf)) continue
                         
                         val binFreqHz = chunkStartHz + (i * chunkHzPerBin)
-                        // Only use bins within our intended hop range
-                        if (binFreqHz >= hopStartHz && binFreqHz <= hopEndHz) {
-                            if (binFreqHz >= range.startHz && binFreqHz <= range.endHz) {
-                                val uiBinIndex = ((binFreqHz - range.startHz) / hzPerUiBin).toInt()
-                                    .coerceIn(0, config.numBins - 1)
-                                
-                                // Max-pooling: keep the highest peak if multiple raw bins map to one UI bin
-                                if (rawMagnitudes[i] > masterSpectrum[uiBinIndex]) {
-                                    masterSpectrum[uiBinIndex] = rawMagnitudes[i]
-                                }
+                        if (binFreqHz >= range.startHz && binFreqHz <= range.endHz) {
+                            val uiBinIndex = ((binFreqHz - range.startHz) / hzPerUiBin).toInt()
+                                .coerceIn(0, config.numBins - 1)
+                            
+                            // Max-pooling: keep the highest peak if multiple raw bins map to one UI bin
+                            if (rawMagnitudes[i] > masterSpectrum[uiBinIndex]) {
+                                masterSpectrum[uiBinIndex] = rawMagnitudes[i]
                             }
                         }
                     }
@@ -282,10 +280,31 @@ class SpectrumViewModel @Inject constructor(
                 } // End of hop loop
 
                 if (sweepFailed) {
-                    _state.value = _state.value.copy(
-                        hwError = "Read error from dongle. Falling back to demo.",
-                        isDemoMode = true,
-                    )
+                    // Attempt to re-open the hardware before giving up
+                    val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+                    val usbDevice = usbManager.deviceList.values
+                        .firstOrNull { usbDeviceManager.isSupportedDevice(it) }
+                    if (usbDevice != null && !sdrSource.isOpen) {
+                        _state.value = _state.value.copy(hwError = "Dongle disconnected. Reconnecting...")
+                        sdrSource.close()
+                        delay(500)
+                        val err = sdrSource.open(usbManager, usbDevice)
+                        if (err == null) {
+                            sdrSource.setGain(_state.value.scanConfig.gainMode, _state.value.scanConfig.manualGainDb)
+                            sdrSource.startStream()
+                            _state.value = _state.value.copy(hwError = null, isDemoMode = false)
+                        } else {
+                            _state.value = _state.value.copy(
+                                hwError = "Dongle disconnected. Falling back to demo mode.",
+                                isDemoMode = true,
+                            )
+                        }
+                    } else {
+                        _state.value = _state.value.copy(
+                            hwError = "Read error from dongle. Falling back to demo.",
+                            isDemoMode = true,
+                        )
+                    }
                     delay(FRAME_DELAY_MS)
                     continue
                 }

@@ -28,9 +28,6 @@ class RtlSdrSource @Inject constructor(
     private var numBins    = 1024
     private var windowType = 1   // Hamming
 
-    // IQ buffer: we read several FFT-worth of samples per call and average
-    // Using 8× the FFT size gives better SNR from incoherent averaging
-    private val READS_PER_SPECTRUM = 4
 
     /**
      * Opens the RTL-SDR hardware and claims the USB interface.
@@ -84,14 +81,14 @@ class RtlSdrSource @Inject constructor(
     /**
      * Read one spectrum frame from the hardware.
      *
-     * Reads [READS_PER_SPECTRUM] IQ blocks, processes each with KissFFT
+     * Reads [numReads] IQ blocks, processes each with KissFFT
      * (native), averages in **linear power** domain, then converts back
      * to dBm. This preserves narrow signal peaks that dB-domain averaging
      * would flatten.
      *
      * @return FloatArray of [numBins] dBm values, or null on I/O error.
      */
-    fun readSpectrum(bins: Int = numBins): FloatArray? {
+    fun readSpectrum(bins: Int = numBins, numReads: Int = 4): FloatArray? {
         numBins = bins
         val dev = device ?: return null
 
@@ -100,7 +97,7 @@ class RtlSdrSource @Inject constructor(
         val linearAccum = FloatArray(bins) { 0f }
         var validReads = 0
 
-        repeat(READS_PER_SPECTRUM) { i ->
+        repeat(numReads) { i ->
             val iq = dev.readSamples(bytesPerBlock) ?: run {
                 Log.w(tag, "readSamples returned null on block $i")
                 return@repeat

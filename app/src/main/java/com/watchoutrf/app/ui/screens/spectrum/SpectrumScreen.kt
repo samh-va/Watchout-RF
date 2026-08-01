@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
@@ -135,7 +136,7 @@ private fun TopStatusBar(
     onNavigateBack: () -> Unit,
     onResolutionChanged: (Int) -> Unit,
 ) {
-    val resolutionOptions = listOf(512, 1024, 2048)
+    val resolutionOptions = listOf(1024, 2048, 4096)
 
     Row(
         verticalAlignment = Alignment.CenterVertically,

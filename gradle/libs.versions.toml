@@ -10,6 +10,7 @@ coroutines = "1.9.0"
 hilt = "2.53.1"
 ksp = "2.0.21-1.0.28"
 hiltNavigationCompose = "1.2.0"
+room = "2.6.1"
 
 [libraries]
 # AndroidX Core
@@ -40,6 +41,11 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-android-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
 androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+
+# Room
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 
 # Testing
 junit = { group = "junit", name = "junit", version = "4.13.2" }

@@ -19,6 +19,7 @@ data class SpectrumState(
     val hwError: String? = null,
     val debugState: String = "INIT",
     val activeMarkerX: Float? = null,  // Normalized X position [0..1], null = no active marker
+    val namedFrequencies: List<com.watchoutrf.app.domain.model.NamedFrequency> = emptyList(),
 ) {
     val allMarkers: List<Marker>
         get() = markers + autoDetectedPeaks
