@@ -5,7 +5,7 @@ package com.watchoutrf.app.domain.model
  */
 data class ScanConfig(
     val frequencyRange: FrequencyRange = FrequencyRange.IEM_RANGE,
-    val numBins: Int = 1024,
+    val numBins: Int = 2048,
     val gainMode: GainMode = GainMode.Auto,
     val manualGainDb: Int = 40,
     val windowType: WindowType = WindowType.HAMMING,
