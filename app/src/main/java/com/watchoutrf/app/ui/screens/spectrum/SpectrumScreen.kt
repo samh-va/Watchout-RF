@@ -62,6 +62,16 @@ fun SpectrumScreen(
     }
 
     var showFrequencyManager by remember { mutableStateOf(false) }
+    var exportMessage      by remember { mutableStateOf<String?>(null) }
+
+    // File picker for WWB7 export
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            exportMessage = viewModel.exportWwb(uri) ?: "Exportado correctamente."
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -100,6 +110,9 @@ fun SpectrumScreen(
                 onShowFrequencyManager = { showFrequencyManager = true },
                 onColorChange = viewModel::updateMarkerColor,
                 onUpdateMarkerLabel = viewModel::updateMarkerLabel,
+                onExportWwb = {
+                    exportLauncher.launch("WatchoutRF_scan.csv")
+                },
             )
 
             // ─── RIGHT SPECTRUM AREA ───
@@ -123,6 +136,17 @@ fun SpectrumScreen(
             onAddFrequency = viewModel::addNamedFrequency,
             onDeleteFrequency = viewModel::deleteNamedFrequency,
             onToggleVisibility = viewModel::toggleFrequencyVisibility
+        )
+    }
+
+    exportMessage?.let { msg ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { exportMessage = null },
+            title = { Text(if (msg.startsWith("Exportado")) "Export exitoso" else "Error de export") },
+            text  = { Text(msg) },
+            confirmButton = {
+                TextButton(onClick = { exportMessage = null }) { Text("OK") }
+            },
         )
     }
 }
@@ -285,6 +309,7 @@ private fun ControlPanel(
     onShowFrequencyManager: () -> Unit,
     onColorChange: (Int, MarkerColor) -> Unit,
     onUpdateMarkerLabel: (Int, String) -> Unit,
+    onExportWwb: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -416,6 +441,35 @@ private fun ControlPanel(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // ─── Export WWB7 ───
+        val hasData = state.currentSpectrum != null || state.maxHoldSpectrum != null
+        HorizontalDivider(color = GridLine, thickness = 0.5.dp)
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onExportWwb,
+            enabled = hasData,
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = androidx.compose.ui.graphics.Color(0xFFFF6B35),
+                disabledContentColor = TextSecondary,
+            ),
+            border = androidx.compose.foundation.BorderStroke(
+                width = 1.dp,
+                brush = if (hasData)
+                    androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(0xFFFF6B35).copy(alpha = 0.6f))
+                else
+                    androidx.compose.ui.graphics.SolidColor(GridLine),
+            ),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = "Export WWB7",
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
 
         Spacer(modifier = Modifier.height(8.dp))

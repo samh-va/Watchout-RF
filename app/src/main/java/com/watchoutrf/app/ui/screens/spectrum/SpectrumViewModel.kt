@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 import com.watchoutrf.app.data.db.NamedFrequencyDao
+import com.watchoutrf.app.data.export.WwbExporter
 
 /**
  * Orchestrates the spectrum scan loop.
@@ -560,6 +561,26 @@ class SpectrumViewModel @Inject constructor(
                 color = finalColor,
             )
         )
+    }
+
+    /**
+     * Exports the current spectrum (or Max Hold if active) to a WWB7-compatible CSV file.
+     * [uri] must come from an ActivityResultContracts.CreateDocument picker.
+     * Returns null on success, or an error message on failure.
+     */
+    fun exportWwb(uri: android.net.Uri): String? {
+        val config   = _state.value.scanConfig
+        val range    = config.frequencyRange
+        val spectrum = _state.value.maxHoldSpectrum?.takeIf { config.maxHoldEnabled }
+            ?: _state.value.currentSpectrum
+            ?: return "No spectrum data available to export."
+
+        val spectrumData = com.watchoutrf.app.domain.model.SpectrumData(
+            frequencyStartHz = range.startHz,
+            frequencyEndHz   = range.endHz,
+            magnitudes       = spectrum,
+        )
+        return WwbExporter.export(context, spectrumData, uri)
     }
 
     fun dismissHwError() {
