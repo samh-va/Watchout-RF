@@ -72,7 +72,9 @@ fun FrequencyManagerSheet(
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp)
                 ) {
                     items(frequencies) { freq ->
                         FrequencyItem(
