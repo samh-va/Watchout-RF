@@ -562,6 +562,7 @@ private fun SpectrumArea(
                     frequencies = state.namedFrequencies,
                     startHz = config.frequencyRange.startHz,
                     endHz = config.frequencyRange.endHz,
+                    textMeasurer = textMeasurer,
                     modifier = Modifier.fillMaxSize()
                 )
 
