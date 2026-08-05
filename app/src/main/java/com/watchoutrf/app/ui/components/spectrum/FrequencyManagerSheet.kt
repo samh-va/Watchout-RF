@@ -152,8 +152,9 @@ private fun AddFrequencyDialog(
     onDismiss: () -> Unit,
     onConfirm: (name: String, freqHz: Long) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
+    var name    by remember { mutableStateOf("") }
     var freqStr by remember { mutableStateOf("") }
+    var error   by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -163,7 +164,7 @@ private fun AddFrequencyDialog(
             Column {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = it; error = null },
                     label = { Text("Name (e.g., PSM 1000 Ch1)") },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -176,10 +177,12 @@ private fun AddFrequencyDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = freqStr,
-                    onValueChange = { freqStr = it },
-                    label = { Text("Frequency (MHz)") },
+                    onValueChange = { freqStr = it; error = null },
+                    label = { Text("Frequency (MHz), e.g. 523.300") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
+                    isError = error != null,
+                    supportingText = error?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
@@ -192,9 +195,14 @@ private fun AddFrequencyDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val mhz = freqStr.toDoubleOrNull()
-                    if (name.isNotBlank() && mhz != null) {
-                        onConfirm(name, (mhz * 1_000_000).toLong())
+                    // Accept both "." and "," as decimal separator (locale-safe)
+                    val normalized = freqStr.trim().replace(",", ".")
+                    val mhz = normalized.toDoubleOrNull()
+                    when {
+                        name.isBlank() -> error = "Name is required"
+                        mhz == null    -> error = "Enter a valid frequency (e.g. 523.300)"
+                        mhz <= 0       -> error = "Frequency must be greater than 0"
+                        else -> onConfirm(name.trim(), (mhz * 1_000_000).toLong())
                     }
                 }
             ) {
