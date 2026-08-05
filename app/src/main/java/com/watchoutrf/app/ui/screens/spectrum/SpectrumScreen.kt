@@ -133,7 +133,7 @@ fun SpectrumScreen(
         FrequencyManagerSheet(
             frequencies = state.namedFrequencies,
             onDismiss = { showFrequencyManager = false },
-            onAddFrequency = viewModel::addNamedFrequency,
+            onAddFrequency = { name, freqHz -> viewModel.addNamedFrequency(name, freqHz) },
             onDeleteFrequency = viewModel::deleteNamedFrequency,
             onToggleVisibility = viewModel::toggleFrequencyVisibility
         )
