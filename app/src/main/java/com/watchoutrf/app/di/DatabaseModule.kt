@@ -22,7 +22,11 @@ object DatabaseModule {
             context,
             AppDatabase::class.java,
             "watchoutrf_db"
-        ).build()
+        )
+        // If the schema changes and there's no explicit migration,
+        // drop and recreate the database instead of crashing silently.
+        .fallbackToDestructiveMigration()
+        .build()
     }
 
     @Provides

@@ -374,7 +374,7 @@ class SpectrumViewModel @Inject constructor(
                         frameForDetection,
                         minPeakDbm    = config.referenceLevel - config.dynamicRange + 10f,
                         minDistanceBins = config.numBins / 50,
-                        maxPeaks      = 8,
+                        maxPeaks      = 4,
                     )
                 } else {
                     _state.value.autoDetectedPeaks
