@@ -49,6 +49,7 @@ data class SpectrumState(
         if (hwError != other.hwError) return false
         if (debugState != other.debugState) return false
         if (activeMarkerX != other.activeMarkerX) return false
+        if (namedFrequencies != other.namedFrequencies) return false
 
         return true
     }
@@ -66,6 +67,7 @@ data class SpectrumState(
         result = 31 * result + (hwError?.hashCode() ?: 0)
         result = 31 * result + debugState.hashCode()
         result = 31 * result + (activeMarkerX?.hashCode() ?: 0)
+        result = 31 * result + namedFrequencies.hashCode()
         return result
     }
 }
