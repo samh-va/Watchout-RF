@@ -14,12 +14,15 @@ import com.watchoutrf.app.domain.model.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.util.Log
 import javax.inject.Inject
 
 import com.watchoutrf.app.data.db.NamedFrequencyDao
@@ -57,16 +60,32 @@ class SpectrumViewModel @Inject constructor(
     init {
         observeUsbConnection()
         viewModelScope.launch {
-            namedFrequencyDao.getAllFrequencies().collect { frequencies ->
-                _state.value = _state.value.copy(namedFrequencies = frequencies)
+            Log.d("WatchoutRF", "Starting to collect namedFrequencies flow")
+            try {
+                namedFrequencyDao.getAllFrequencies().collect { frequencies ->
+                    Log.d("WatchoutRF", "namedFrequencies updated: ${frequencies.size} items")
+                    _state.value = _state.value.copy(namedFrequencies = frequencies)
+                }
+            } catch (e: Exception) {
+                Log.e("WatchoutRF", "Error collecting namedFrequencies flow", e)
             }
         }
     }
 
     // CRUD for Named Frequencies
     fun addNamedFrequency(name: String, freqHz: Long, color: String = "#FF6B00") {
+        Log.d("WatchoutRF", "addNamedFrequency called: name=$name freqHz=$freqHz")
         viewModelScope.launch {
-            namedFrequencyDao.insert(NamedFrequency(name = name, frequencyHz = freqHz, colorHex = color))
+            try {
+                withContext(Dispatchers.IO) {
+                    namedFrequencyDao.insert(
+                        NamedFrequency(name = name, frequencyHz = freqHz, colorHex = color)
+                    )
+                }
+                Log.d("WatchoutRF", "addNamedFrequency: insert SUCCESS")
+            } catch (e: Exception) {
+                Log.e("WatchoutRF", "addNamedFrequency: insert FAILED", e)
+            }
         }
     }
 
