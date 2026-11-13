@@ -44,6 +44,8 @@ class RtlSdrDevice private constructor(
         private const val TAG = "RtlSdrDevice"
         const val DEFAULT_SAMPLE_RATE = 2_048_000   // 2.048 MS/s
         private const val BULK_TIMEOUT_MS = 1_000
+        /** Consecutive failed USB waits (~10 ms apart) before the stream is declared dead. */
+        private const val MAX_STREAM_FAILURES = 50
 
         /**
          * Open the RTL-SDR device and claim the USB interface.
@@ -192,15 +194,29 @@ class RtlSdrDevice private constructor(
                 return@Thread
             }
             
+            var consecutiveFailures = 0
             while (isStreaming) {
                 // Wait for the next completed request
                 val response = connection.requestWait()
                 if (response == null) {
-                    Log.e(TAG, "requestWait returned null! Hardware might have stalled.")
+                    consecutiveFailures++
+                    if (consecutiveFailures >= MAX_STREAM_FAILURES) {
+                        // The device is gone (unplugged) or permanently stalled. Stop
+                        // instead of spinning forever; readSamples() then reports the
+                        // failure and the scan loop reconnects or falls back to demo.
+                        Log.e(TAG, "USB stream lost after $consecutiveFailures failed waits; stopping.")
+                        isStreaming = false
+                        synchronized(streamLock) { streamLock.notifyAll() }
+                        break
+                    }
+                    if (consecutiveFailures == 1) {
+                        Log.w(TAG, "requestWait returned null. Hardware might have stalled.")
+                    }
                     demod.resetBuffer()
-                    try { Thread.sleep(10) } catch (e: Exception) {}
+                    try { Thread.sleep(10) } catch (e: InterruptedException) { break }
                     continue
                 }
+                consecutiveFailures = 0
                 
                 val buffer = response.clientData as java.nio.ByteBuffer
                 
@@ -254,7 +270,6 @@ class RtlSdrDevice private constructor(
         demod.setI2cRepeater(false)
         if (ok) {
             currentFreqHz = freqHz
-            Log.i(TAG, "Tuned to ${freqHz / 1_000_000.0} MHz")
         }
         return ok
     }

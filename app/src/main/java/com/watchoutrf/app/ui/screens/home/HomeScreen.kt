@@ -35,12 +35,11 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    // Start USB monitoring when screen is composed
-    DisposableEffect(Unit) {
-        viewModel.startUsbMonitoring()
-        onDispose {
-            viewModel.stopUsbMonitoring()
-        }
+    // USB monitoring is owned by MainActivity (started in onCreate, stopped in onDestroy).
+    // It must NOT be stopped when leaving this screen: the Spectrum screen relies on
+    // attach / detach events to switch between the dongle and demo mode.
+    LaunchedEffect(Unit) {
+        viewModel.startUsbMonitoring() // idempotent
     }
 
     // Load native version

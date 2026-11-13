@@ -48,6 +48,8 @@ class UsbDeviceManager @Inject constructor(
         )
     }
 
+    private var isMonitoring = false
+
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
@@ -79,7 +81,9 @@ class UsbDeviceManager @Inject constructor(
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     Log.i(TAG, "USB device detached")
-                    _connectionState.value = UsbConnectionState.Disconnected
+                    // This broadcast fires for ANY USB device (mouse, hub, storage…).
+                    // Re-scan instead of assuming the dongle is the one that left.
+                    scanForDevices()
                 }
             }
         }
@@ -89,7 +93,15 @@ class UsbDeviceManager @Inject constructor(
      * Start listening for USB device events.
      * Must be called when the app starts (e.g., from MainActivity.onCreate).
      */
+    @Synchronized
     fun startMonitoring() {
+        // Idempotent: registering the same receiver twice delivers every event twice.
+        if (isMonitoring) {
+            scanForDevices()
+            return
+        }
+        isMonitoring = true
+
         val filter = IntentFilter().apply {
             addAction(ACTION_USB_PERMISSION)
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -110,7 +122,10 @@ class UsbDeviceManager @Inject constructor(
     /**
      * Stop listening for USB device events.
      */
+    @Synchronized
     fun stopMonitoring() {
+        if (!isMonitoring) return
+        isMonitoring = false
         try {
             context.unregisterReceiver(usbReceiver)
             Log.i(TAG, "USB monitoring stopped")
@@ -132,11 +147,11 @@ class UsbDeviceManager @Inject constructor(
                 Log.i(TAG, "Found supported SDR device: ${device.deviceName} " +
                         "(VID=0x${device.vendorId.toString(16)}, PID=0x${device.productId.toString(16)})")
 
+                val deviceInfo = device.toDeviceInfo()
                 if (usbManager.hasPermission(device)) {
-                    val deviceInfo = device.toDeviceInfo()
                     _connectionState.value = UsbConnectionState.Connected(deviceInfo)
-                } else {
-                    val deviceInfo = device.toDeviceInfo()
+                } else if (_connectionState.value != UsbConnectionState.PermissionRequested(deviceInfo)) {
+                    // Only prompt once per device; repeated scans must not stack dialogs.
                     _connectionState.value = UsbConnectionState.PermissionRequested(deviceInfo)
                     requestPermission(device)
                 }
@@ -162,31 +177,14 @@ class UsbDeviceManager @Inject constructor(
         val permissionIntent = PendingIntent.getBroadcast(
             context,
             0,
-            Intent(ACTION_USB_PERMISSION),
+            // Explicit package is required: since Android 14 a mutable PendingIntent
+            // wrapping an implicit Intent throws IllegalArgumentException, and our
+            // receiver is registered as RECEIVER_NOT_EXPORTED.
+            Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
             flags
         )
         usbManager.requestPermission(device, permissionIntent)
         Log.i(TAG, "Permission requested for ${device.deviceName}")
-    }
-
-    /**
-     * Get the native file descriptor for the connected device.
-     * Returns -1 if no device is connected or permission not granted.
-     */
-    fun getDeviceFileDescriptor(): Int {
-        val state = _connectionState.value
-        if (state !is UsbConnectionState.Connected) return -1
-
-        val deviceList = usbManager.deviceList
-        for ((_, device) in deviceList) {
-            if (isSupportedDevice(device) && usbManager.hasPermission(device)) {
-                val connection = usbManager.openDevice(device)
-                if (connection != null) {
-                    return connection.fileDescriptor
-                }
-            }
-        }
-        return -1
     }
 
     fun isSupportedDevice(device: UsbDevice): Boolean {
