@@ -234,15 +234,6 @@ private fun TopStatusBar(
             )
         }
 
-        Spacer(modifier = Modifier.width(12.dp))
-
-        // Debug counter
-        Text(
-            text = "DBG: ${state.debugState}",
-            style = MaterialTheme.typography.labelSmall,
-            color = SuccessGreen,
-        )
-
         Spacer(modifier = Modifier.weight(1f))
 
         // Resolution selector

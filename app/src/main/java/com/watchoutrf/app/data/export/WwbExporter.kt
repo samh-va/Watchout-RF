@@ -3,6 +3,7 @@ package com.watchoutrf.app.data.export
 import android.content.Context
 import android.net.Uri
 import com.watchoutrf.app.domain.model.SpectrumData
+import java.util.Locale
 import kotlin.math.ceil
 
 /**
@@ -62,13 +63,14 @@ object WwbExporter {
                 if (magnitudes[j] > peakDbm) peakDbm = magnitudes[j]
             }
 
-            // Frequency at center of this window
-            val windowCenterBin = i + (windowEnd - i) / 2
-            val freqHz = data.frequencyAtBin(windowCenterBin)
+            // Frequency at the centre of this window (bins i until windowEnd)
+            val freqHz = data.frequencyStartHz + (i + windowEnd) / 2.0 * binWidthHz
             val freqMhz = freqHz / 1_000_000.0
 
-            // WWB7 expects: "470.025,-95.5" (3 decimal places for MHz, 1 for dBm)
-            lines.add("%.3f,%.1f".format(freqMhz, peakDbm))
+            // WWB7 expects: "470.025,-95.5" (3 decimal places for MHz, 1 for dBm).
+            // Locale.US is mandatory: on a device set to Spanish, German, French…
+            // the default locale writes "470,025,-95,5", which WWB cannot parse.
+            lines.add(String.format(Locale.US, "%.3f,%.1f", freqMhz, peakDbm))
 
             i += decimFactor
         }
