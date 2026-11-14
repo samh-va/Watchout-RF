@@ -66,6 +66,10 @@ class SpectrumAverager @Inject constructor() {
         maxHoldSpectrum = null
     }
 
+    /** Copy of the running average, or null before the first frame. */
+    @Synchronized
+    fun current(): FloatArray? = averagedSpectrum?.copyOf()
+
     /** Reset only the max-hold trace, keeping the running average. */
     @Synchronized
     fun resetMaxHold() {

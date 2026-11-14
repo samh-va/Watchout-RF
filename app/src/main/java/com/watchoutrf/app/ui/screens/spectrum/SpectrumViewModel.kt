@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.watchoutrf.app.data.dsp.PeakDetector
 import com.watchoutrf.app.data.dsp.SpectrumAverager
+import com.watchoutrf.app.data.dsp.SweepTrace
 import com.watchoutrf.app.data.dsp.SyntheticSignalGenerator
 import com.watchoutrf.app.data.sdr.RtlSdrSource
 import com.watchoutrf.app.data.usb.UsbConnectionState
@@ -265,7 +266,10 @@ class SpectrumViewModel @Inject constructor(
                 val usableBwHz = (sdrBwHz * 0.80).toLong()  // 1,638,400 Hz
                 val numHops    = maxOf(1, Math.ceil(spanHz.toDouble() / usableBwHz.toDouble()).toInt())
                 
-                val masterSpectrum = FloatArray(config.numBins) { -300f }
+                val masterSpectrum = FloatArray(config.numBins) { SweepTrace.EMPTY }
+                // Average as it stood before this sweep, for the in-progress previews
+                val previousAverage = averager.current()
+                var lastPreviewMs = System.currentTimeMillis()
                 val hzPerUiBin = spanHz.toDouble() / config.numBins
                 
                 var sweepFailed = false
@@ -348,6 +352,29 @@ class SpectrumViewModel @Inject constructor(
                         }
                     }
 
+
+                    // Show this hop right away instead of waiting for the whole sweep.
+                    // A full sweep over a wide range takes seconds on real hardware;
+                    // the trace is redrawn as the sweep advances across the span.
+                    val nowMs = System.currentTimeMillis()
+                    if (hopIndex < numHops - 1 && nowMs - lastPreviewMs >= PREVIEW_INTERVAL_MS) {
+                        lastPreviewMs = nowMs
+                        val coveredBins = ((hopEndHz - range.startHz) / hzPerUiBin).toInt()
+                        val preview = SweepTrace.preview(
+                            raw             = masterSpectrum,
+                            coveredBins     = coveredBins,
+                            previousAverage = previousAverage,
+                            alpha           = config.averagingFactor,
+                            floorDbm        = config.referenceLevel - config.dynamicRange,
+                        )
+                        _state.update { cur ->
+                            if (cur.scanConfig.frequencyRange != range || cur.scanConfig.numBins != config.numBins) {
+                                cur
+                            } else {
+                                cur.copy(currentSpectrum = preview)
+                            }
+                        }
+                    }
                 } // End of hop loop
 
                 if (sweepFailed) {
@@ -371,42 +398,8 @@ class SpectrumViewModel @Inject constructor(
                 // the average and the max-hold trace with data from the previous settings.
                 if (sweepAborted) continue
 
-                // Gap-filling: linearly interpolate between valid bins
-                // This smoothly bridges the DC-trimmed zones instead of
-                // carrying a spike value forward.
-                var gapStart = -1
-                for (i in masterSpectrum.indices) {
-                    if (masterSpectrum[i] <= -299.9f) {
-                        if (gapStart < 0) gapStart = i
-                    } else {
-                        if (gapStart >= 0) {
-                            // We found the end of a gap at index i
-                            val leftVal = if (gapStart > 0) masterSpectrum[gapStart - 1] else masterSpectrum[i]
-                            val rightVal = masterSpectrum[i]
-                            val gapLen = i - gapStart
-                            for (g in 0 until gapLen) {
-                                val t = (g + 1).toFloat() / (gapLen + 1).toFloat()
-                                masterSpectrum[gapStart + g] = leftVal + (rightVal - leftVal) * t
-                            }
-                            gapStart = -1
-                        }
-                    }
-                }
-                // Fill any trailing gap
-                if (gapStart >= 0) {
-                    val leftVal = if (gapStart > 0) masterSpectrum[gapStart - 1] else -100f
-                    for (g in gapStart until masterSpectrum.size) {
-                        masterSpectrum[g] = leftVal
-                    }
-                }
-                
-                // Spectral smoothing: 3-bin moving average to reduce visual noise
-                val smoothed = FloatArray(masterSpectrum.size)
-                for (i in masterSpectrum.indices) {
-                    val left  = if (i > 0) masterSpectrum[i - 1] else masterSpectrum[i]
-                    val right = if (i < masterSpectrum.size - 1) masterSpectrum[i + 1] else masterSpectrum[i]
-                    smoothed[i] = (left + masterSpectrum[i] + right) / 3f
-                }
+                // Fill the bins no hop wrote to (DC notches) and smooth the trace
+                val smoothed = SweepTrace.finish(masterSpectrum)
 
                 // --- DSP pipeline (Runs once per full sweep) ---
                 val averaged = averager.average(smoothed, config.averagingFactor)
@@ -679,6 +672,7 @@ class SpectrumViewModel @Inject constructor(
         private const val TAG                   = "WatchoutRF"
         private const val FRAME_DELAY_MS        = 33L   // ~30 sweeps/s upper bound (demo mode)
         private const val MIN_SWEEP_GAP_MS      = 5L
+        private const val PREVIEW_INTERVAL_MS   = 50L   // in-sweep redraws, at most ~20 per second
         private const val MAX_WATERFALL_HISTORY = 100
         private const val PEAK_DETECT_INTERVAL  = 10
     }
